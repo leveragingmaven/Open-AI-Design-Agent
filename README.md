@@ -123,34 +123,45 @@ The **Workflow Studio** lets you build and run multi-step design pipelines witho
 
 ## 🚀 Quick Start
 
-> Studio code is being added — for now this repo holds the agent design and roadmap. Watch / star the repo to be notified when the studio lands. The hosted version at [dev.muapi.ai/open-lovart](https://dev.muapi.ai/open-lovart) is live.
+### Prerequisites
 
-### Prerequisites (when self-hosting lands)
-
-- [Node.js](https://nodejs.org/) (v18+)
+- [Node.js](https://nodejs.org/) (v18+) for the client
+- [Python](https://www.python.org/) (3.10+) for the server
 - A [Muapi.ai](https://muapi.ai?utm_source=github&utm_medium=readme&utm_campaign=open-ai-design-agent) API key (free tier available)
 
 ### Setup
 
 ```bash
 # Clone the repository
-git clone https://github.com/Anil-matcha/Open-Lovart.git
-cd Open-Lovart
+git clone https://github.com/Anil-matcha/Open-AI-Design-Agent.git
+cd Open-AI-Design-Agent
 
-# Install dependencies
-npm run setup
+# Install client dependencies
+npm run install:all
 
-# Start the dev server
-npm run dev
+# Start the client dev server
+npm run dev:app
+
+# In a separate terminal, install and run the server
+cd server && pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
 Visit `http://localhost:3000` and enter your Muapi API key on first launch.
 
+### Run with Docker Compose
+
+```bash
+docker compose up --build
+```
+
+This starts the client on `http://localhost:3000` and the server on `http://localhost:8000`.
+
 ### Production Build
 
 ```bash
-npm run build
-npm run start
+npm run build:app
+npm --workspace client start
 ```
 
 ## 🎨 Supported Model Categories
@@ -169,10 +180,11 @@ npm run start
 
 ## 🛠️ Tech Stack
 
-- **Next.js 14** — App Router, server components, fast dev server
-- **React 18** — Studio UI components
-- **Tailwind CSS v3** — Utility-first styling
-- **npm workspaces** — Monorepo with shared `packages/studio` library
+- **Next.js 16** — App Router, server components, fast dev server
+- **React 19** — Studio UI components
+- **Tailwind CSS v4** — Utility-first styling
+- **npm workspaces** — Monorepo with shared `packages/design-agent` library
+- **FastAPI (Python)** — Backend server (`server/app`)
 - **Muapi.ai** — AI model API gateway
 - **Vibe Workflow** — Open-source node-based workflow engine
 
@@ -234,8 +246,11 @@ This project is an independent, experimental, and open-source initiative and is 
 **Self-Hosted:**
 ```bash
 git clone https://github.com/Anil-matcha/Open-AI-Design-Agent.git
-cd Open-AI-Design-Agent && npm run setup && npm run dev
+cd Open-AI-Design-Agent
+npm run install:all && npm run dev:app
 ```
+
+Or with Docker: `docker compose up --build`
 
 Visit `http://localhost:3000` and enter your Muapi API key.
 
