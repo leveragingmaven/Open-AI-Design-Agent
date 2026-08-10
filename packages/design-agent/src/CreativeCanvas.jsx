@@ -7,7 +7,7 @@ import {
   FiSend, FiImage, FiTerminal, FiSearch,
   FiZap, FiLayout, FiUpload,
   FiPlus, FiSun, FiMoon, FiCheck, FiX, FiEdit2,
-  FiArrowLeft, FiAlertCircle, FiCopy,
+  FiArrowLeft, FiAlertCircle, FiCopy, FiChevronDown,
 } from "react-icons/fi";
 import { CgTerminal } from "react-icons/cg";
 import { BiLoaderAlt } from "react-icons/bi";
@@ -34,6 +34,18 @@ import Image from "next/image";
 
 
 const API = "/api/v1/creative-agent";
+
+// "Create with" capability options for the Assistant HOME composer. AUTO lets the
+// backend Maven agent route naturally from the prompt; explicit options constrain
+// the current request to a single media capability.
+const CREATE_WITH_OPTIONS = [
+  { id: "AUTO", label: "Auto", hint: "Let the agent decide" },
+  { id: "IMAGE", label: "Image", hint: "Image generation" },
+  { id: "VIDEO", label: "Video", hint: "Video generation" },
+  { id: "MARKETING", label: "Marketing", hint: "Marketing asset" },
+  { id: "AUDIO", label: "Audio", hint: "Audio generation" },
+];
+const CREATE_WITH_DEFAULT = "AUTO";
 
 const formatTime = (dateStr) => {
   if (!dateStr) return "";
@@ -80,6 +92,10 @@ export default function CreativeCanvas({
   // userBalanceLabel: string like "$ 5.00" or "1200 credits" to show in the dropdown.
   // If not provided, falls back to "$ {user.balance}".
   userBalanceLabel = null,
+  // homeShortcuts: array of { label, items: [{id, label, icon, route}] } resolved
+  // by the host shell from the Creator OS navigation registry and shown on the
+  // Assistant HOME state. Optional; HOME falls back to no shortcuts when absent.
+  homeShortcuts = [],
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -116,6 +132,15 @@ export default function CreativeCanvas({
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionCursorPos, setMentionCursorPos] = useState(0);
   const [hoveredAsset, setHoveredAsset] = useState(null);
+  // Assistant HOME state — skills picker opens toward the most vertical space so
+  // it never covers the hero heading when opened from the composer controls.
+  const [skillsOpenUp, setSkillsOpenUp] = useState(false);
+  // "Create with" capability hint shipped to the backend agent with the first
+  // message. AUTO lets the agent route naturally from the prompt; the explicit
+  // options (IMAGE/VIDEO/MARKETING/AUDIO) constrain the current request.
+  const [createWith, setCreateWith] = useState("AUTO");
+  const [createWithOpen, setCreateWithOpen] = useState(false);
+  const [createWithOpenUp, setCreateWithOpenUp] = useState(false);
 
   // Left Sidebar and Session Management
   const [showLeftSidebar, setShowLeftSidebar] = useState(true);
@@ -684,7 +709,13 @@ export default function CreativeCanvas({
     const attachmentNote = currentAttachments.length
       ? "\n\n[Attached " + currentAttachments.map(a => `${a.asset_label} (${a.kind || "image"})`).join(", ") + "]"
       : "";
-    const msg = typed + attachmentNote;
+    // "Create with" capability hint shipped to the backend agent. AUTO ships
+    // nothing (the agent routes naturally); explicit options constrain the
+    // current request to one media capability.
+    const capabilityNote = createWith !== CREATE_WITH_DEFAULT
+      ? `\n\n[Create this as a ${createWith.toLowerCase()} — use the ${createWith.toLowerCase()} generation capability.]`
+      : "";
+    const msg = typed + attachmentNote + capabilityNote;
     const msgAttachments = [...currentAttachments];
     
     if (!attachmentsOverride) setAttachments([]);
@@ -744,6 +775,9 @@ export default function CreativeCanvas({
     } finally {
       setBusy(false);
       await loadAssets();
+      // The capability hint is a launch-time constraint — the agent already
+      // absorbed it into the first request; the conversation continues in AUTO.
+      if (createWith !== CREATE_WITH_DEFAULT) setCreateWith(CREATE_WITH_DEFAULT);
       if (activeSessionId) {
         setMessages(prev => {
           const newMsgs = [...prev];
@@ -956,8 +990,261 @@ export default function CreativeCanvas({
 
   if (!mounted) return null;
 
+  // ── MavenSync Assistant HOME state ───────────────────────────────────────────
+  // Shown only when there is no active session. Composes a spacious, centered
+  // conversational starting point. Submitting routes through the SAME existing
+  // sendMessage()/ensureSession() flow — no second chat path — after which the
+  // runtime (canvas + chat) takes over unchanged.
+  const isHome = !inEmbedMode && !sessionId;
+  const canSend = !busy && (input.trim() || attachments.length > 0);
+  const homeSubmit = () => { if (!busy) sendMessage(); };
+  const toggleSkillsMenu = () => {
+    const willOpen = !showSkillsMenu;
+    if (willOpen) {
+      const r = textareaRef.current?.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - (r?.bottom || 0);
+      const spaceAbove = r?.top || 0;
+      setSkillsOpenUp(spaceBelow < 320 && spaceAbove > 320);
+    }
+    setCreateWithOpen(false);
+    setShowSkillsMenu(willOpen);
+  };
+
+  if (isHome) {
+    return (
+      <div className="h-full w-full text-sm flex flex-col ms-assistant-home bg-page text-on-primary overflow-hidden relative" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <Toaster position="top-right" reverseOrder={false} />
+        <main className="flex-1 min-h-0 overflow-y-auto scrollbar-subtle">
+          <div className="min-h-full flex flex-col items-center justify-center px-6 pt-8 pb-56 md:pb-48">
+            <div className="w-full max-w-2xl mx-auto flex flex-col items-center text-center">
+
+              <div className="flex items-center gap-2 mb-3 text-[10px] font-semibold uppercase tracking-[0.3em] text-agent-gold">
+                <RiSparklingLine className="text-agent-pink" size={12} />
+                MavenSync Assistant
+              </div>
+
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-on-primary leading-snug">
+                What would you like to create?
+              </h1>
+              <p className="mt-2 text-on-secondary max-w-lg leading-relaxed text-[13px]">
+                Tell me what you're working on. I'll help you figure out the best way to create it.
+              </p>
+
+              {/* MavenSync command surface */}
+            </div>
+          </div>
+        </main>
+
+        {/* Docked creation bar */}
+        <div className="absolute inset-x-0 bottom-0 z-30 px-3 md:px-4 pb-4">
+          <div className="mx-auto w-full max-w-[95%] lg:max-w-4xl">
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className="w-full flex flex-col rounded-[2rem] border border-white/[0.08] bg-gradient-to-b from-[#1a1a1e]/95 via-[#0f0f12]/95 to-[#0c0c0e]/95 backdrop-blur-2xl shadow-[0_15px_50px_rgba(0,0,0,0.8)] transition-all relative"
+            >
+                {isDragging && (
+                  <div className="absolute inset-0 z-50 flex items-center justify-center bg-home-gold/10 backdrop-blur-[2px] pointer-events-none rounded-2xl">
+                    <div className="bg-home-gold/10 px-5 py-4 rounded-full border border-agent-gold animate-pulse">
+                      <FiUpload className="text-agent-gold" size={26} />
+                    </div>
+                  </div>
+                )}
+
+                {activeSkill && (
+                  <div className="flex items-center gap-2 px-4 pt-3">
+                    <button
+                      onClick={() => setActiveSkill(null)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-home-surface border border-home-border text-xs text-on-primary hover:bg-agent-pink hover:text-white transition-colors"
+                    >
+                      <FiX size={12} />
+                      <span>{activeSkill.name}</span>
+                    </button>
+                  </div>
+                )}
+
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 px-4 pt-3">
+                    {attachments.map((att) => (
+                      <div key={att.asset_label} className="relative group flex items-center gap-2 px-2 py-1 bg-home-surface border border-home-border rounded-lg shadow-sm cursor-help transition-all hover:border-agent-gold">
+                        <div className="w-5 h-5 rounded overflow-hidden">
+                          {att.kind === "image" ? <img src={att.url} className="w-full h-full object-cover" /> : <FiTerminal size={10} />}
+                        </div>
+                        <span className="text-[10px] font-bold text-on-secondary">{att.asset_label}</span>
+                        <button onClick={() => removeAttachment(att.asset_label)} className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-agent-pink hover:text-agent-pink">
+                          <FiX size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  autoFocus
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const pos = e.target.selectionStart;
+                    setInput(val);
+                    const lastAtPos = val.lastIndexOf("@", pos - 1);
+                    if (lastAtPos !== -1 && (lastAtPos === 0 || val[lastAtPos - 1] === " ")) {
+                      const query = val.substring(lastAtPos + 1, pos);
+                      if (!query.includes(" ")) {
+                        setMentionQuery(query);
+                        setMentionCursorPos(lastAtPos);
+                        setShowMentionPopup(true);
+                      } else setShowMentionPopup(false);
+                    } else setShowMentionPopup(false);
+                  }}
+                  onKeyDown={handleKey}
+                  onInput={e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 168) + "px"; }}
+                  placeholder="Ask anything, create anything..."
+                  className="w-full bg-transparent border-none outline-none focus:ring-0 focus:outline-none px-5 py-4 text-[14px] leading-relaxed resize-none min-h-[80px] max-h-[168px] scrollbar-subtle placeholder:text-on-muted/60"
+                  rows={1}
+                />
+
+                {/* Footer control row — anchor for the skills picker */}
+                <div className="px-3 pb-3 pt-1.5 flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="file"
+                      className="hidden"
+                      ref={fileInputRef}
+                      accept="image/*,video/*,audio/*"
+                      onChange={handleFileUpload}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="p-2 text-[#64748B] hover:text-[#F3BA4A] rounded-xl hover:bg-[#12151E] transition-colors"
+                      title="Attach file"
+                      aria-label="Attach file"
+                    >
+                      {uploading ? <BiLoaderAlt size={17} className="animate-spin" /> : <FiImage size={17} />}
+                    </button>
+                    {skills.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={toggleSkillsMenu}
+                        className={`p-2 rounded-xl transition-colors flex items-center gap-1.5 text-[#64748B] hover:text-[#F3BA4A] ${showSkillsMenu ? "text-[#F3BA4A] bg-[#12151E]" : ""}`}
+                        title="Agent Skills"
+                        aria-label="Agent Skills"
+                      >
+                        <GoBook size={17} />
+                      </button>
+                    )}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!createWithOpen) {
+                            const r = textareaRef.current?.getBoundingClientRect();
+                            const spaceBelow = window.innerHeight - (r?.bottom || 0);
+                            setCreateWithOpenUp(spaceBelow < 320 && (r?.top || 0) > 320);
+                          }
+                          setCreateWithOpen(v => !v);
+                          setShowSkillsMenu(false);
+                        }}
+                        className={`px-2.5 h-[34px] rounded-lg transition-all flex items-center gap-1.5 text-[11px] font-semibold
+                          ${createWith === CREATE_WITH_DEFAULT
+                            ? "text-[#94A3B8] hover:text-[#F8FAFC] bg-[#1A1E2B] hover:bg-[#252B3B] border border-[#252B3B]"
+                            : "text-[#E82070] bg-[#E82070]/15 hover:bg-[#E82070]/25 border border-[#E82070]/35"}`}
+                        title="Create with"
+                        aria-label="Create with mode"
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${createWith === CREATE_WITH_DEFAULT ? "bg-[#64748B]" : "bg-[#E82070]"}`} />
+                        {createWith === CREATE_WITH_DEFAULT ? "Create with" : createWith.toLowerCase()}
+                        <FiChevronDown size={12} />
+                      </button>
+                      {createWithOpen && (
+                        <div className={`absolute left-0 ${createWithOpenUp ? "bottom-full mb-1.5" : "top-full mt-1.5"} w-[280px] max-w-[calc(100vw-2rem)] bg-[#12151E] backdrop-blur-xl border border-home-border rounded-xl shadow-2xl overflow-hidden z-[130] animate-in fade-in ${createWithOpenUp ? "slide-in-from-bottom-2" : "slide-in-from-top-2"} duration-200`}>
+                          <div className="px-3.5 py-2 border-b border-home-border text-[10px] font-bold uppercase tracking-[0.2em] text-agent-gold/80">
+                            Create with
+                          </div>
+                          <div className="p-1.5 max-h-[min(60vh,360px)] overflow-y-auto scrollbar-subtle">
+                            {CREATE_WITH_OPTIONS.map(opt => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => { setCreateWith(opt.id); setCreateWithOpen(false); textareaRef.current?.focus(); }}
+                                className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-left transition-all group
+                                  ${createWith === opt.id ? "bg-home-gold/10 border border-agent-gold" : "border border-transparent hover:bg-home-surface"}`}
+                              >
+                                <span className="flex flex-col min-w-0">
+                                  <span className={`text-[13px] font-bold ${createWith === opt.id ? "text-agent-gold" : "text-on-primary"}`}>
+                                    {opt.label}
+                                  </span>
+                                  <span className="text-[11px] text-on-secondary opacity-70 italic whitespace-nowrap">{opt.hint}</span>
+                                </span>
+                                {createWith === opt.id && <FiCheck size={14} className="text-agent-gold shrink-0" />}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={homeSubmit}
+                    disabled={!canSend}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all
+                      ${canSend ? "bg-[#E82070] text-white hover:bg-[#C01358] shadow-[0_0_20px_rgba(232,32,112,0.3)]" : "bg-[#1A1E2B] text-[#64748B] cursor-not-allowed border border-[#252B3B]"}`}
+                    aria-label="Send"
+                  >
+                    {busy ? <BiLoaderAlt size={14} className="animate-spin" /> : <FiSend size={14} />}
+                  </button>
+                </div>
+
+                {/* Skills picker — anchored to the composer controls, collision-aware,
+                    opens downward when space allows so it never covers the hero. */}
+                {showSkillsMenu && (
+                  <div className={`absolute right-2 w-72 bg-home-surface border border-home-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200 z-[120]
+                    ${skillsOpenUp ? "bottom-full mb-2" : "top-full mt-1"}`}>
+                    <div className="px-4 py-3 border-b border-home-border flex items-center justify-between bg-home-surface/60">
+                      <h3 className="text-[12px] font-bold text-on-primary uppercase tracking-tight">Expert Skills</h3>
+                      <button
+                        type="button"
+                        onClick={() => setShowSkillsMenu(false)}
+                        className="p-1 rounded hover:bg-home-surface text-on-secondary hover:text-agent-gold transition-colors"
+                        aria-label="Close skills"
+                      >
+                        <FiX size={13} />
+                      </button>
+                    </div>
+                    <div className="max-h-[min(48vh,340px)] overflow-y-auto p-1.5 scrollbar-subtle">
+                      {skills.map(skill => (
+                        <button
+                          key={skill.name}
+                          onClick={() => { setActiveSkill(skill); setShowSkillsMenu(false); textareaRef.current?.focus(); }}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-home-surface text-left transition-all group ${activeSkill?.name === skill.name ? "bg-home-gold/10 border border-agent-gold" : "border border-transparent"}`}
+                        >
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors shadow-sm shrink-0 ${activeSkill?.name === skill.name ? "bg-agent-gold text-black" : "bg-home-surface text-agent-gold border border-home-border"}`}>
+                            <RiSparklingLine size={16} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className={`font-bold capitalize text-[12px] ${activeSkill?.name === skill.name ? "text-agent-gold" : "text-on-primary"}`}>
+                              {skill.name}
+                            </div>
+                            <div className="text-[10px] text-on-secondary mt-0.5 line-clamp-1 opacity-70 italic">{skill.description || "Specialized workflow"}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+    );
+  }
+
   return (
-    <div className="h-dvh w-full text-sm flex flex-col bg-bg-page text-primary-text overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="h-full w-full text-sm flex flex-col bg-bg-page text-primary-text overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
       <Toaster position="top-right" reverseOrder={false} />
       <main className="flex h-full w-full overflow-hidden">
         {/* Left Sidebar: Session List — owner only. Embed visitors don't get
