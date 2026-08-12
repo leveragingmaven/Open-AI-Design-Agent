@@ -1119,7 +1119,7 @@ export default function CreativeCanvas({
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading}
-                      className="p-2 text-[#64748B] hover:text-[#F3BA4A] rounded-xl hover:bg-[#12151E] transition-colors"
+                      className="p-2 text-[#D4A858] hover:text-[#F3BA4A] rounded-xl hover:bg-[#12151E] transition-colors"
                       title="Attach file"
                       aria-label="Attach file"
                     >
@@ -1129,7 +1129,7 @@ export default function CreativeCanvas({
                       <button
                         type="button"
                         onClick={toggleSkillsMenu}
-                        className={`p-2 rounded-xl transition-colors flex items-center gap-1.5 text-[#64748B] hover:text-[#F3BA4A] ${showSkillsMenu ? "text-[#F3BA4A] bg-[#12151E]" : ""}`}
+                        className={`p-2 rounded-xl transition-colors flex items-center gap-1.5 text-[#D4A858] hover:text-[#F3BA4A] ${showSkillsMenu ? "text-[#F3BA4A] bg-[#12151E]" : ""}`}
                         title="Agent Skills"
                         aria-label="Agent Skills"
                       >
@@ -1150,12 +1150,12 @@ export default function CreativeCanvas({
                         }}
                         className={`px-2.5 h-[34px] rounded-lg transition-all flex items-center gap-1.5 text-[11px] font-semibold
                           ${createWith === CREATE_WITH_DEFAULT
-                            ? "text-[#94A3B8] hover:text-[#F8FAFC] bg-[#1A1E2B] hover:bg-[#252B3B] border border-[#252B3B]"
+                            ? "text-[#D4A858] hover:text-[#F8FAFC] bg-[#1A1E2B] hover:bg-[#252B3B] border border-[#252B3B]"
                             : "text-[#E82070] bg-[#E82070]/15 hover:bg-[#E82070]/25 border border-[#E82070]/35"}`}
                         title="Create with"
                         aria-label="Create with mode"
                       >
-                        <span className={`w-1.5 h-1.5 rounded-full ${createWith === CREATE_WITH_DEFAULT ? "bg-[#64748B]" : "bg-[#E82070]"}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full ${createWith === CREATE_WITH_DEFAULT ? "bg-[#D4A858]" : "bg-[#E82070]"}`} />
                         {createWith === CREATE_WITH_DEFAULT ? "Create with" : createWith.toLowerCase()}
                         <FiChevronDown size={12} />
                       </button>
@@ -1192,7 +1192,7 @@ export default function CreativeCanvas({
                     onClick={homeSubmit}
                     disabled={!canSend}
                     className={`w-9 h-9 rounded-full flex items-center justify-center transition-all
-                      ${canSend ? "bg-[#E82070] text-white hover:bg-[#C01358] shadow-[0_0_20px_rgba(232,32,112,0.3)]" : "bg-[#1A1E2B] text-[#64748B] cursor-not-allowed border border-[#252B3B]"}`}
+                      ${canSend ? "bg-[#E82070] text-white hover:bg-[#C01358] shadow-[0_0_20px_rgba(232,32,112,0.3)]" : "bg-[#1A1E2B] text-[#D4A858] cursor-not-allowed border border-[#252B3B]"}`}
                     aria-label="Send"
                   >
                     {busy ? <BiLoaderAlt size={14} className="animate-spin" /> : <FiSend size={14} />}

@@ -24,14 +24,14 @@
 @layer base {
   :root {
     /* Brand Colors */
-    --brand-primary: #3b82f6;
-    --brand-primary-hover: #2563EB;
-    --brand-accent: #818CF8;
-    --brand-accent-hover: #7C3AED;
+    --brand-primary: #D4A858;
+    --brand-primary-hover: #D4A858;
+    --brand-accent: #E82070;
+    --brand-accent-hover: #E82070;
 
     /* Semantic Theme Tokens */
-    --primary: #3b82f6;
-    --secondary: #818CF8;
+    --primary: #D4A858;
+    --secondary: #E82070;
     --bg-page: #F8FAFC;
     --bg-card: #FFFFFF;
     --bg-card-hover: #F1F5F9;
@@ -68,8 +68,8 @@
   }
 
   .dark {
-    --primary: #3b82f6;
-    --secondary: #A78BFA;
+    --primary: #D4A858;
+    --secondary: #E82070;
     --bg-page: #121212;
     --bg-card: #1E1E1E;
     --bg-card-hover: #2A2A2A;
