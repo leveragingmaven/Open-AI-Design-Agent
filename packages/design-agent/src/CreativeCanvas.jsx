@@ -309,6 +309,10 @@ export default function CreativeCanvas({
       const { data } = await axios.get(`${API}/agent-skills`, { headers: getHeaders() });
       setSkills(data);
     } catch (err) {
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
+        setSkills([]);
+        return;
+      }
       console.error("Failed to fetch skills:", err);
     }
   };
