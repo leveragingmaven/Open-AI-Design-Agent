@@ -96,6 +96,11 @@ export default function CreativeCanvas({
   // by the host shell from the Creator OS navigation registry and shown on the
   // Assistant HOME state. Optional; HOME falls back to no shortcuts when absent.
   homeShortcuts = [],
+  // When true, ordinary chat is handled by the Creator OS controlled
+  // conversation endpoint instead of MuAPI /chat /run-skill. Media
+  // execution is never triggered from chat; the user must explicitly
+  // use Start Creative Work → Create.
+  controlledMode = false,
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -178,6 +183,10 @@ export default function CreativeCanvas({
   const syncedUrlsRef = useRef(new Set());
   const justCreatedSessionRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
+  // In controlled mode, only the server-sanitized user/assistant messages may be
+  // PATCHed to the session transcript. The full local UI state can contain UI
+  // metadata and transient fields that must never reach persistence.
+  const controlledMessagesToPersist = useRef([]);
 
   const getHeaders = useCallback(() => {
     if (inEmbedMode) {
@@ -716,7 +725,7 @@ export default function CreativeCanvas({
     // "Create with" capability hint shipped to the backend agent. AUTO ships
     // nothing (the agent routes naturally); explicit options constrain the
     // current request to one media capability.
-    const capabilityNote = createWith !== CREATE_WITH_DEFAULT
+    const capabilityNote = (!controlledMode && createWith !== CREATE_WITH_DEFAULT)
       ? `\n\n[Create this as a ${createWith.toLowerCase()} — use the ${createWith.toLowerCase()} generation capability.]`
       : "";
     const msg = typed + attachmentNote + capabilityNote;
@@ -747,29 +756,51 @@ export default function CreativeCanvas({
       } catch {}
 
       let endpoint = `${API}/sessions/${activeSessionId}/chat`;
-      let payload = {
-        message: typed,
-        model: "gpt-5-mini",
-        messages_snapshot: updatedMessages,
-        canvas_state: canvasState,
-      };
-
-      // If a skill is pinned, use the run-skill endpoint
-      if (currentSkill) {
-        endpoint = `${API}/sessions/${activeSessionId}/run-skill`;
-        // Map the user input to the first required input of the skill
-        const primaryInputKey = currentSkill.inputs?.[0] || "premise";
-        payload = {
-          skill_name: currentSkill.name,
-          inputs: { [primaryInputKey]: typed },
+      if (controlledMode) {
+        // Creator OS controlled conversation path:
+        // never call MuAPI /chat or /run-skill; use server-owned text
+        // intelligence and rely on the existing message persistence patch
+        // in the finally block below.
+        const res = await axios.post(
+          '/api/design-agent/conversation',
+          { conversationId: activeSessionId, message: typed },
+          { headers: getHeaders() }
+        );
+        const replyText = res.data?.reply || '';
+        const persistedMessages = res.data?.persistedMessages || [];
+        setMessages(prev => {
+          const arr = [...prev];
+          if (aIdx >= 0) arr[aIdx] = { ...arr[aIdx], content: replyText };
+          return arr;
+        });
+        // In controlled mode, only server-sanitized messages may be persisted.
+        controlledMessagesToPersist.current = persistedMessages;
+      } else {
+        // Native MuAPI Design Agent execution path (legacy/unchanged).
+        let payload = {
+          message: typed,
+          model: "gpt-5-mini",
           messages_snapshot: updatedMessages,
-          model: "gpt-5-mini"
+          canvas_state: canvasState,
         };
-        if (!skillOverride) setActiveSkill(null); // Clear skill after sending if not override
-      }
 
-      const enqueueRes = await axios.post(endpoint, payload, { headers: getHeaders() });
-      await resumePolling(enqueueRes.data.job_id, aIdx);
+        // If a skill is pinned, use the run-skill endpoint
+        if (currentSkill) {
+          endpoint = `${API}/sessions/${activeSessionId}/run-skill`;
+          // Map the user input to the first required input of the skill
+          const primaryInputKey = currentSkill.inputs?.[0] || "premise";
+          payload = {
+            skill_name: currentSkill.name,
+            inputs: { [primaryInputKey]: typed },
+            messages_snapshot: updatedMessages,
+            model: "gpt-5-mini"
+          };
+          if (!skillOverride) setActiveSkill(null); // Clear skill after sending if not override
+        }
+
+        const enqueueRes = await axios.post(endpoint, payload, { headers: getHeaders() });
+        await resumePolling(enqueueRes.data.job_id, aIdx);
+      }
     } catch (err) {
       setMessages(prev => {
         const arr = [...prev];
@@ -783,11 +814,19 @@ export default function CreativeCanvas({
       // absorbed it into the first request; the conversation continues in AUTO.
       if (createWith !== CREATE_WITH_DEFAULT) setCreateWith(CREATE_WITH_DEFAULT);
       if (activeSessionId) {
-        setMessages(prev => {
-          const newMsgs = [...prev];
-          axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: newMsgs }, { headers: getHeaders() }).catch(() => {});
-          return newMsgs;
-        });
+        if (controlledMode) {
+          // Controlled mode: persist only server-sanitized user/assistant messages.
+          const safeMessages = controlledMessagesToPersist.current || [];
+          controlledMessagesToPersist.current = [];
+          axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: safeMessages }, { headers: getHeaders() }).catch(() => {});
+        } else {
+          // Native mode: preserve existing behavior unchanged.
+          setMessages(prev => {
+            const newMsgs = [...prev];
+            axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: newMsgs }, { headers: getHeaders() }).catch(() => {});
+            return newMsgs;
+          });
+        }
       }
     }
   };
