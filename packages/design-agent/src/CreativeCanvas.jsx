@@ -759,22 +759,79 @@ export default function CreativeCanvas({
       if (controlledMode) {
         // Creator OS controlled conversation path:
         // never call MuAPI /chat or /run-skill; use server-owned text
-        // intelligence and rely on the existing message persistence patch
-        // in the finally block below.
-        const res = await axios.post(
-          '/api/design-agent/conversation',
-          { conversationId: activeSessionId, message: typed },
-          { headers: getHeaders() }
-        );
-        const replyText = res.data?.reply || '';
-        const persistedMessages = res.data?.persistedMessages || [];
+        // intelligence over a server-side SSE stream. Only app-derived events
+        // (delta/done/error) are consumed here — raw provider frames never
+        // reach the browser. The final "done" event carries the server-
+        // sanitized reply and persistedMessages, which replace any locally
+        // accumulated text before persistence in the finally block below.
+        const res = await fetch('/api/design-agent/conversation', {
+          method: 'POST',
+          headers: { ...getHeaders(), Accept: 'text/event-stream' },
+          body: JSON.stringify({ conversationId: activeSessionId, message: typed }),
+        });
+
+        if (!res.ok || !res.body) {
+          let safeError = 'Unable to continue this conversation right now.';
+          try {
+            const errBody = await res.json();
+            if (errBody?.error && typeof errBody.error === 'string') safeError = errBody.error;
+          } catch {}
+          throw new Error(safeError);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let donePayload = null;
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let frameEnd;
+            while ((frameEnd = buffer.indexOf('\n\n')) >= 0) {
+              const frame = buffer.slice(0, frameEnd);
+              buffer = buffer.slice(frameEnd + 2);
+              const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+              if (!dataLine) continue;
+              let evt;
+              try {
+                evt = JSON.parse(dataLine.slice(5).trim());
+              } catch {
+                continue;
+              }
+              if (evt?.type === 'delta' && typeof evt.text === 'string' && evt.text) {
+                // Progressively append to the same assistant bubble.
+                setMessages(prev => {
+                  const arr = [...prev];
+                  if (aIdx >= 0 && arr[aIdx]) {
+                    arr[aIdx] = { ...arr[aIdx], content: (arr[aIdx].content || '') + evt.text };
+                  }
+                  return arr;
+                });
+              } else if (evt?.type === 'done') {
+                donePayload = evt;
+              } else if (evt?.type === 'error') {
+                throw new Error(typeof evt.error === 'string' && evt.error ? evt.error : 'Conversation failed.');
+              }
+            }
+          }
+        } finally {
+          try { reader.cancel(); } catch {}
+        }
+
+        if (!donePayload) {
+          throw new Error('Conversation ended without a final response.');
+        }
+
+        // Replace streamed text with the server-sanitized final reply and
+        // persist ONLY the server-provided sanitized messages.
         setMessages(prev => {
           const arr = [...prev];
-          if (aIdx >= 0) arr[aIdx] = { ...arr[aIdx], content: replyText };
+          if (aIdx >= 0 && arr[aIdx]) arr[aIdx] = { ...arr[aIdx], content: donePayload.reply || '' };
           return arr;
         });
-        // In controlled mode, only server-sanitized messages may be persisted.
-        controlledMessagesToPersist.current = persistedMessages;
+        controlledMessagesToPersist.current = donePayload.persistedMessages || [];
       } else {
         // Native MuAPI Design Agent execution path (legacy/unchanged).
         let payload = {
