@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, Suspense, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import axios from "axios";
+import { createDesignAgentConversationClient } from "./conversationClient.js";
 import {
   FiSend, FiImage, FiTerminal, FiSearch,
   FiZap, FiLayout, FiUpload,
@@ -34,6 +35,11 @@ import Image from "next/image";
 
 
 const API = "/api/v1/creative-agent";
+
+// Shared Design Agent conversation client — the single implementation of the
+// controlled conversation wire behavior used by both CreativeCanvas and the
+// Creator OS Dashboard Maven conversation.
+const conversationClient = createDesignAgentConversationClient({ apiBase: API });
 
 // "Create with" capability options for the Assistant HOME composer. AUTO lets the
 // backend Maven agent route naturally from the prompt; explicit options constrain
@@ -537,7 +543,7 @@ export default function CreativeCanvas({
 
   const loadHistory = async () => {
     try {
-      const { data } = await axios.get(`${API}/sessions/${sessionId}/messages`, { headers: getHeaders() });
+      const data = await conversationClient.loadMessages(sessionId, getHeaders());
       if (data && data.length > 0) {
         // Cleanup: Hide approval cards that already have results or are for inactive jobs
         const cleaned = data.map(m => ({
@@ -598,15 +604,15 @@ export default function CreativeCanvas({
   
   const ensureSession = async () => {
     if (sessionId) return sessionId;
-    const { data } = await axios.post(`${API}/sessions`, {}, { headers: getHeaders() });
+    const id = await conversationClient.createSession(getHeaders());
     justCreatedSessionRef.current = true;
     if (inEmbedMode) {
-      setActiveEmbedSession(data.id);
+      setActiveEmbedSession(id);
     } else {
-      router.replace(`?session=${data.id}`, { scroll: false });
+      router.replace(`?session=${id}`, { scroll: false });
       fetchSessions();
     }
-    return data.id;
+    return id;
   };
 
   const processFile = async (file) => {
@@ -758,80 +764,36 @@ export default function CreativeCanvas({
       let endpoint = `${API}/sessions/${activeSessionId}/chat`;
       if (controlledMode) {
         // Creator OS controlled conversation path:
-        // never call MuAPI /chat or /run-skill; use server-owned text
-        // intelligence over a server-side SSE stream. Only app-derived events
-        // (delta/done/error) are consumed here — raw provider frames never
-        // reach the browser. The final "done" event carries the server-
+        // use the shared Design Agent conversation client, which POSTs to the
+        // server-owned /api/design-agent/conversation SSE stream and consumes
+        // delta/done/error events through the shared parser. Raw provider frames
+        // never reach the browser. The final "done" event carries the server-
         // sanitized reply and persistedMessages, which replace any locally
         // accumulated text before persistence in the finally block below.
-        const res = await fetch('/api/design-agent/conversation', {
-          method: 'POST',
-          headers: { ...getHeaders(), Accept: 'text/event-stream' },
-          body: JSON.stringify({ conversationId: activeSessionId, message: typed }),
+        const { reply, persistedMessages } = await conversationClient.send({
+          conversationId: activeSessionId,
+          message: typed,
+          headers: getHeaders(),
+          onDelta: (text) => {
+            // Progressively append to the same assistant bubble.
+            setMessages(prev => {
+              const arr = [...prev];
+              if (aIdx >= 0 && arr[aIdx]) {
+                arr[aIdx] = { ...arr[aIdx], content: (arr[aIdx].content || '') + text };
+              }
+              return arr;
+            });
+          },
         });
-
-        if (!res.ok || !res.body) {
-          let safeError = 'Unable to continue this conversation right now.';
-          try {
-            const errBody = await res.json();
-            if (errBody?.error && typeof errBody.error === 'string') safeError = errBody.error;
-          } catch {}
-          throw new Error(safeError);
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let donePayload = null;
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            let frameEnd;
-            while ((frameEnd = buffer.indexOf('\n\n')) >= 0) {
-              const frame = buffer.slice(0, frameEnd);
-              buffer = buffer.slice(frameEnd + 2);
-              const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
-              if (!dataLine) continue;
-              let evt;
-              try {
-                evt = JSON.parse(dataLine.slice(5).trim());
-              } catch {
-                continue;
-              }
-              if (evt?.type === 'delta' && typeof evt.text === 'string' && evt.text) {
-                // Progressively append to the same assistant bubble.
-                setMessages(prev => {
-                  const arr = [...prev];
-                  if (aIdx >= 0 && arr[aIdx]) {
-                    arr[aIdx] = { ...arr[aIdx], content: (arr[aIdx].content || '') + evt.text };
-                  }
-                  return arr;
-                });
-              } else if (evt?.type === 'done') {
-                donePayload = evt;
-              } else if (evt?.type === 'error') {
-                throw new Error(typeof evt.error === 'string' && evt.error ? evt.error : 'Conversation failed.');
-              }
-            }
-          }
-        } finally {
-          try { reader.cancel(); } catch {}
-        }
-
-        if (!donePayload) {
-          throw new Error('Conversation ended without a final response.');
-        }
 
         // Replace streamed text with the server-sanitized final reply and
         // persist ONLY the server-provided sanitized messages.
         setMessages(prev => {
           const arr = [...prev];
-          if (aIdx >= 0 && arr[aIdx]) arr[aIdx] = { ...arr[aIdx], content: donePayload.reply || '' };
+          if (aIdx >= 0 && arr[aIdx]) arr[aIdx] = { ...arr[aIdx], content: reply || '' };
           return arr;
         });
-        controlledMessagesToPersist.current = donePayload.persistedMessages || [];
+        controlledMessagesToPersist.current = persistedMessages || [];
       } else {
         // Native MuAPI Design Agent execution path (legacy/unchanged).
         let payload = {
@@ -875,7 +837,7 @@ export default function CreativeCanvas({
           // Controlled mode: persist only server-sanitized user/assistant messages.
           const safeMessages = controlledMessagesToPersist.current || [];
           controlledMessagesToPersist.current = [];
-          axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: safeMessages }, { headers: getHeaders() }).catch(() => {});
+          conversationClient.persist(activeSessionId, safeMessages, getHeaders()).catch(() => {});
         } else {
           // Native mode: preserve existing behavior unchanged.
           setMessages(prev => {
