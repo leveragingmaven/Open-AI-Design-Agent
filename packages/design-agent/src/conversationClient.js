@@ -19,14 +19,14 @@ function conversationError(message, code = 'conversation_failed', status) {
  * Encapsulates ONLY the existing controlled conversation mechanics:
  * - owned session creation/selection
  * - loading/restoring conversation history
- * - POST /api/design-agent/conversation with the existing body shape
+ * - POST /api/design-agent/conversation with the existing body shape and optional trusted session asset IDs
  * - consuming the existing SSE stream with the existing createSseFrameParser
  * - streaming delta updates
  * - done handling
  * - typed error handling
  * - persisting ONLY server-sanitized persistedMessages
  *
- * The SSE contract, parser, and server endpoint are unchanged. Callers own
+ * The SSE contract and parser are unchanged. The server validates optional asset IDs against session-owned assets. Callers own
  * optimistic UI state; this module owns the wire behavior.
  */
 export function createDesignAgentConversationClient({
@@ -66,11 +66,15 @@ export function createDesignAgentConversationClient({
     return Array.isArray(data) ? data : [];
   }
 
-  async function send({ conversationId, message, headers = {}, onDelta } = {}) {
+  async function send({ conversationId, message, attachments = [], headers = {}, onDelta } = {}) {
+    const payload = { conversationId, message };
+    if (Array.isArray(attachments)) {
+      payload.attachments = attachments;
+    }
     const response = await fetchImpl(conversationEndpoint, {
       method: 'POST',
       headers: { ...headers, Accept: 'text/event-stream' },
-      body: JSON.stringify({ conversationId, message }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok || !response.body) {
