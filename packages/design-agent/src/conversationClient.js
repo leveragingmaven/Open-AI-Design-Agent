@@ -66,6 +66,66 @@ export function createDesignAgentConversationClient({
     return Array.isArray(data) ? data : [];
   }
 
+  /**
+   * The creator's owned sessions, as returned by the ownership-filtered proxy.
+   * Array or `{ sessions: [] }` are both accepted so either upstream shape works.
+   */
+  async function listSessions(headers = {}) {
+    const response = await fetchImpl(`${apiBase}/sessions`, {
+      method: 'GET',
+      headers: { ...headers },
+    });
+    if (!response.ok) {
+      throw conversationError('Unable to load your conversations.', 'sessions_unavailable', response.status);
+    }
+    const data = await response.json().catch(() => null);
+    const sessions = Array.isArray(data) ? data : Array.isArray(data?.sessions) ? data.sessions : [];
+    return sessions.filter((session) => session && typeof session.id === 'string' && session.id);
+  }
+
+  async function renameSession(sessionId, name, headers = {}) {
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      throw conversationError('A conversation id is required.', 'session_id_required', 400);
+    }
+    const title = typeof name === 'string' ? name.trim() : '';
+    if (!title) {
+      throw conversationError('A conversation name is required.', 'session_name_required', 400);
+    }
+    const response = await fetchImpl(`${apiBase}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: title }),
+    });
+    if (!response.ok) {
+      const unavailable = response.status === 404 || response.status === 403;
+      throw conversationError(
+        unavailable ? 'This conversation is not available.' : 'Unable to rename this conversation.',
+        unavailable ? 'session_unavailable' : 'rename_failed',
+        response.status,
+      );
+    }
+    return title;
+  }
+
+  async function deleteSession(sessionId, headers = {}) {
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      throw conversationError('A conversation id is required.', 'session_id_required', 400);
+    }
+    const response = await fetchImpl(`${apiBase}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { ...headers },
+    });
+    if (!response.ok) {
+      const unavailable = response.status === 404 || response.status === 403;
+      throw conversationError(
+        unavailable ? 'This conversation is no longer available.' : 'Unable to delete this conversation.',
+        unavailable ? 'session_unavailable' : 'delete_failed',
+        response.status,
+      );
+    }
+    return true;
+  }
+
   async function send({ conversationId, message, attachments = [], headers = {}, onDelta } = {}) {
     const payload = { conversationId, message };
     if (Array.isArray(attachments)) {
@@ -165,6 +225,9 @@ export function createDesignAgentConversationClient({
 
   return {
     createSession,
+    listSessions,
+    renameSession,
+    deleteSession,
     loadMessages,
     send,
     persist,
